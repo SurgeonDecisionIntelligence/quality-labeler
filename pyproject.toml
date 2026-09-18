@@ -1,0 +1,27 @@
+[project]
+name = "quality-labeler"
+version = "0.1.0"
+description = "Fast keyboard-driven quality labeling of MRI DICOM series"
+readme = "README.md"
+authors = [
+    { name = "Josh Fisher", email = "fisherj@sdi-global.ai" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.5.3",
+    "pydicom>=3.0.2",
+    "pylibjpeg[all]>=2.1.0",
+    "pyside6>=6.11.2",
+]
+
+[project.scripts]
+quality-labeler = "quality_labeler.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.11,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

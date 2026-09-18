@@ -1,0 +1,53 @@
+import csv
+
+from quality_labeler.db import LabelStore
+from quality_labeler.inference import HeaderInfo
+from quality_labeler.schema import Labels
+
+
+def _store_with_series(tmp_path):
+    store = LabelStore(tmp_path / "labels.db")
+    store.upsert_series(
+        "p1/s1",
+        tmp_path,
+        HeaderInfo(series_uid="1.2.3", echo_time=100.0),
+        num_slices=12,
+        num_files=12,
+        load_error=None,
+        guesses={"guess_plane": "sagittal", "guess_region": None, "guess_weight": "T2",
+                 "guess_weight_reason": "description"},
+    )
+    return store
+
+
+def test_roundtrip_and_multiple_labelers(tmp_path):
+    store = _store_with_series(tmp_path)
+    a = Labels(quality="reject", motion=True, weight="T1", notes="ghosting")
+    store.save_labels("p1/s1", "alice", a, expected_weight="T2", seconds_spent=3.0)
+    store.save_labels("p1/s1", "bob", Labels(), expected_weight="T2", seconds_spent=1.0)
+
+    assert store.get_labels("p1/s1", "alice") == a
+    assert store.get_labels("p1/s1", "bob") == Labels()
+    assert store.get_labels("p1/s1", "carol") is None
+    assert store.labeled_keys("alice") == {"p1/s1"}
+
+
+def test_relabel_overwrites_and_accumulates_time(tmp_path):
+    store = _store_with_series(tmp_path)
+    store.save_labels("p1/s1", "alice", Labels(), expected_weight=None, seconds_spent=2.0)
+    store.save_labels("p1/s1", "alice", Labels(noise=True), expected_weight=None, seconds_spent=1.5)
+    assert store.get_labels("p1/s1", "alice").noise is True
+    row = store.conn.execute("SELECT seconds_spent FROM labels").fetchone()
+    assert row[0] == 3.5
+
+
+def test_export(tmp_path):
+    store = _store_with_series(tmp_path)
+    store.save_labels("p1/s1", "alice", Labels(clipping=True), expected_weight="T2", seconds_spent=1)
+    out = tmp_path / "out.csv"
+    assert store.export_csv(out) == 1
+    (row,) = csv.DictReader(out.open())
+    assert row["series_key"] == "p1/s1"
+    assert row["clipping"] == "1"
+    assert row["guess_weight"] == "T2"
+    assert row["series_uid"] == "1.2.3"
