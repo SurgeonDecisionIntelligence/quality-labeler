@@ -5,7 +5,7 @@ import getpass
 import sys
 from pathlib import Path
 
-from .db import LabelStore
+from .db import LabelStore, SchemaMismatch
 from .schema import WEIGHTS
 
 
@@ -22,11 +22,16 @@ def _label(args):
         sys.exit(f"No series folders found under {root}")
     print(f"Found {len(paths)} series.", flush=True)
 
+    try:
+        store = LabelStore(args.db)
+    except SchemaMismatch as e:
+        sys.exit(str(e))
+
     app = QApplication(sys.argv[:1])
     window = LabelerWindow(
         root,
         paths,
-        LabelStore(args.db),
+        store,
         labeler=args.labeler,
         expected_weight=None if args.weight == "auto" else args.weight,
         relabel=args.relabel,
@@ -37,7 +42,10 @@ def _label(args):
 
 
 def _export(args):
-    store = LabelStore(args.db)
+    try:
+        store = LabelStore(args.db)
+    except SchemaMismatch as e:
+        sys.exit(str(e))
     n = store.export_csv(args.out)
     print(f"Wrote {n} label rows to {args.out}")
 

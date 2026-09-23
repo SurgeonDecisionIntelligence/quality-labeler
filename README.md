@@ -28,8 +28,9 @@ Options for `label`:
 | Key | Action |
 |---|---|
 | `Enter` / `Space` | Save and go to the next unlabeled series |
-| `1` `2` `3` | Quality: accept / uncertain / reject |
-| `M` `N` `F` `C` `K` `I` | Toggle motion / noise / field inhomogeneity / clipping / musculoskeletal / improper acquisition |
+| `1` `2` `3` | Quality: accept / partially accept / reject |
+| `N` | Cycle noise: none / some / noisy (`Shift+N` backwards) |
+| `M` `F` `C` `H` `A` `I` | Toggle motion / field inhomogeneity / clipping / hardware / misc artifact / improper acquisition |
 | `R` `P` `W` | Cycle region / plane / weight (`Shift` cycles backwards) |
 | `T` or `/` | Type notes (`Enter` saves, `Esc` leaves the field) |
 | `D` | Reset labels to the defaults |
@@ -41,7 +42,7 @@ Options for `label`:
 
 ## Defaults
 
-Labels start at: quality accept, all findings no. Region, plane and weight are
+Labels start at: quality accept, noise none, all findings no. Region, plane and weight are
 pre-filled from the header when possible (`ImageOrientationPatient` for plane;
 BodyPartExamined/descriptions for region; description, then TE/TR/TI for weight),
 falling back to lumbar / sagittal / other. If `--weight` is given it is the default
@@ -61,7 +62,9 @@ error rate of the upstream weight classification or of the header heuristic.
 ## Adding label options
 
 Label options live in `src/quality_labeler/schema.py`. A new flag also needs a
-column in `db.py`.
+column in `db.py` and a bump of `SCHEMA_VERSION`; databases written with an
+older version are rejected on open rather than being written to with the wrong
+columns.
 
 ## Tests
 

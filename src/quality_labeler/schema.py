@@ -2,7 +2,12 @@
 
 from dataclasses import dataclass, fields
 
-QUALITY = ("accept", "uncertain", "reject")
+# Bump when the label set changes, so an older database is rejected instead of
+# being written to with mismatched columns.
+SCHEMA_VERSION = 2
+
+QUALITY = ("accept", "partially accept", "reject")
+NOISE = ("none", "some", "noisy")
 REGIONS = ("lumbar", "cervical", "thoracic")
 PLANES = ("sagittal", "coronal", "axial")
 WEIGHTS = ("T1", "T1+C", "T2", "PD", "STIR", "FLAIR", "T2*", "DWI", "other")
@@ -17,22 +22,26 @@ class Flag:
 
 FLAGS = (
     Flag("motion", "Motion artifact", "M"),
-    Flag("noise", "Noise", "N"),
     Flag("field_inhomogeneity", "Field inhomogeneity", "F"),
     Flag("clipping", "Clipping", "C"),
-    Flag("musculoskeletal", "Musculoskeletal", "K"),
+    Flag("hardware", "Hardware", "H"),
+    Flag("misc_artifact", "Misc artifact", "A"),
     Flag("improper_acquisition", "Improper acquisition", "I"),
 )
+
+# Ordinal scales, shown as a row of radio buttons and cycled with one key.
+SCALES = {"quality": QUALITY, "noise": NOISE}
 
 
 @dataclass
 class Labels:
     quality: str = "accept"
+    noise: str = "none"
     motion: bool = False
-    noise: bool = False
     field_inhomogeneity: bool = False
     clipping: bool = False
-    musculoskeletal: bool = False
+    hardware: bool = False
+    misc_artifact: bool = False
     improper_acquisition: bool = False
     region: str = "lumbar"
     plane: str = "sagittal"

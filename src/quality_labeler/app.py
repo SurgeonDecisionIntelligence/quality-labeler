@@ -27,15 +27,16 @@ from .db import LabelStore
 from .dicom_io import Series, series_key
 from .inference import guess_plane, guess_region, guess_weight
 from .prefetch import Prefetcher
-from .schema import FLAGS, PLANES, QUALITY, REGIONS, WEIGHTS, Labels
+from .schema import FLAGS, NOISE, PLANES, QUALITY, REGIONS, WEIGHTS, Labels
 from .viewer import ImageView
 
 NO_FOCUS = Qt.FocusPolicy.NoFocus
 K = Qt.Key
 
 HELP = """<b>Enter/Space</b> save &amp; next<br>
-<b>1 2 3</b> accept / uncertain / reject<br>
-<b>M N F C K I</b> toggle flags<br>
+<b>1 2 3</b> accept / partially accept / reject<br>
+<b>N</b> cycle noise: none / some / noisy<br>
+<b>M F C H A I</b> toggle findings<br>
 <b>R P W</b> cycle region / plane / weight (Shift = back)<br>
 <b>T</b> or <b>/</b> type notes (Esc leaves)<br>
 <b>D</b> reset labels to defaults<br>
@@ -93,16 +94,9 @@ class LabelerWindow(QMainWindow):
 
         panel = QVBoxLayout()
 
-        quality_box = QGroupBox("Quality")
-        qlay = QHBoxLayout(quality_box)
-        self.quality_group = QButtonGroup(self)
-        self.quality_buttons = {}
-        for i, q in enumerate(QUALITY):
-            b = QRadioButton(f"{q} [{i + 1}]", focusPolicy=NO_FOCUS)
-            self.quality_group.addButton(b)
-            self.quality_buttons[q] = b
-            qlay.addWidget(b)
-        panel.addWidget(quality_box)
+        self.radios: dict[str, dict[str, QRadioButton]] = {}
+        panel.addWidget(self._radio_row("Quality", "quality", QUALITY, per_option_keys=True))
+        panel.addWidget(self._radio_row("Noise [N]", "noise", NOISE))
 
         flag_box = QGroupBox("Findings")
         flay = QVBoxLayout(flag_box)
@@ -157,9 +151,23 @@ class LabelerWindow(QMainWindow):
         lay.addWidget(side)
         self.setCentralWidget(central)
 
+    def _radio_row(self, title: str, name: str, options, per_option_keys: bool = False) -> QGroupBox:
+        box = QGroupBox(title)
+        lay = QHBoxLayout(box)
+        group = QButtonGroup(box)
+        self.radios[name] = {}
+        for i, option in enumerate(options):
+            text = f"{option} [{i + 1}]" if per_option_keys else option
+            b = QRadioButton(text, focusPolicy=NO_FOCUS)
+            group.addButton(b)
+            self.radios[name][option] = b
+            lay.addWidget(b)
+        return box
+
     # --- labels <-> widgets ----------------------------------------------
     def set_labels(self, labels: Labels):
-        self.quality_buttons[labels.quality].setChecked(True)
+        for name, buttons in self.radios.items():
+            buttons[getattr(labels, name)].setChecked(True)
         for name, cb in self.flag_boxes.items():
             cb.setChecked(getattr(labels, name))
         for name, combo in self.combos.items():
@@ -168,17 +176,24 @@ class LabelerWindow(QMainWindow):
         self._update_hints()
 
     def current_labels(self) -> Labels:
-        quality = next(q for q, b in self.quality_buttons.items() if b.isChecked())
         return Labels(
-            quality=quality,
+            **{
+                name: next(v for v, b in buttons.items() if b.isChecked())
+                for name, buttons in self.radios.items()
+            },
             **{name: cb.isChecked() for name, cb in self.flag_boxes.items()},
             **{name: combo.currentText() for name, combo in self.combos.items()},
             notes=self.notes.text().strip(),
         )
 
     def _cycle(self, name: str, step: int):
-        combo = self.combos[name]
-        combo.setCurrentIndex((combo.currentIndex() + step) % combo.count())
+        if name in self.combos:
+            combo = self.combos[name]
+            combo.setCurrentIndex((combo.currentIndex() + step) % combo.count())
+            return
+        buttons = list(self.radios[name].values())
+        current = next(i for i, b in enumerate(buttons) if b.isChecked())
+        buttons[(current + step) % len(buttons)].setChecked(True)
 
     # --- navigation ------------------------------------------------------
     def _is_done(self, i: int) -> bool:
@@ -364,7 +379,9 @@ class LabelerWindow(QMainWindow):
             if not e.isAutoRepeat():
                 self.skip()
         elif K.Key_1 <= key < K.Key_1 + len(QUALITY):
-            self.quality_buttons[QUALITY[key - K.Key_1]].setChecked(True)
+            self.radios["quality"][QUALITY[key - K.Key_1]].setChecked(True)
+        elif key == K.Key_N:
+            self._cycle("noise", -1 if shift else 1)
         elif key == K.Key_R:
             self._cycle("region", -1 if shift else 1)
         elif key == K.Key_P:

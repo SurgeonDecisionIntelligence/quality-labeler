@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .inference import HeaderInfo
-from .schema import FLAGS, Labels
+from .schema import FLAGS, SCHEMA_VERSION, Labels
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS series (
@@ -37,11 +37,12 @@ CREATE TABLE IF NOT EXISTS labels (
     series_key TEXT NOT NULL REFERENCES series(series_key),
     labeler TEXT NOT NULL,
     quality TEXT NOT NULL,
+    noise TEXT NOT NULL,
     motion INTEGER NOT NULL,
-    noise INTEGER NOT NULL,
     field_inhomogeneity INTEGER NOT NULL,
     clipping INTEGER NOT NULL,
-    musculoskeletal INTEGER NOT NULL,
+    hardware INTEGER NOT NULL,
+    misc_artifact INTEGER NOT NULL,
     improper_acquisition INTEGER NOT NULL,
     region TEXT NOT NULL,
     plane TEXT NOT NULL,
@@ -59,6 +60,10 @@ _LABEL_COLS = Labels.field_names()
 _BOOL_COLS = {f.name for f in FLAGS}
 
 
+class SchemaMismatch(RuntimeError):
+    """The database on disk was written with a different set of labels."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -67,7 +72,17 @@ class LabelStore:
     def __init__(self, path: Path):
         self.conn = sqlite3.connect(path, timeout=30)
         self.conn.row_factory = sqlite3.Row
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        existing = self.conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'labels'"
+        ).fetchone()[0]
+        if existing and version != SCHEMA_VERSION:
+            raise SchemaMismatch(
+                f"{path} was written with label schema v{version}, this is v{SCHEMA_VERSION}. "
+                "Label into a new database file."
+            )
         self.conn.executescript(SCHEMA)
+        self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def close(self):
         self.conn.close()

@@ -43,16 +43,20 @@ def test_keyboard_labeling_flow(qapp, dataset, tmp_path):
 
     press(window, Qt.Key.Key_3)  # reject
     press(window, Qt.Key.Key_M)  # motion
+    press(window, Qt.Key.Key_N)  # noise none -> some
+    press(window, Qt.Key.Key_N)  # some -> noisy
+    press(window, Qt.Key.Key_A)  # misc artifact
     press(window, Qt.Key.Key_W)  # T2 -> PD
     press(window, Qt.Key.Key_Return)
     wait_loaded(qapp, window)
     assert window.series.key == "patient1/sag_t2"
 
     saved = store.get_labels("patient1/ax_t1", "alice")
-    assert (saved.quality, saved.motion, saved.weight, saved.noise) == ("reject", True, "PD", False)
+    assert (saved.quality, saved.motion, saved.weight) == ("reject", True, "PD")
+    assert (saved.noise, saved.misc_artifact, saved.hardware) == ("noisy", True, False)
 
     # Fresh defaults on the next series, then go back and see the saved labels.
-    assert window.current_labels().quality == "accept"
+    assert (window.current_labels().quality, window.current_labels().noise) == ("accept", "none")
     press(window, Qt.Key.Key_Left)
     wait_loaded(qapp, window)
     assert window.current_labels() == saved

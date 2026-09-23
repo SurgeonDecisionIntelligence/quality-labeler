@@ -1,6 +1,9 @@
 import csv
+import sqlite3
 
-from quality_labeler.db import LabelStore
+import pytest
+
+from quality_labeler.db import LabelStore, SchemaMismatch
 from quality_labeler.inference import HeaderInfo
 from quality_labeler.schema import Labels
 
@@ -22,7 +25,7 @@ def _store_with_series(tmp_path):
 
 def test_roundtrip_and_multiple_labelers(tmp_path):
     store = _store_with_series(tmp_path)
-    a = Labels(quality="reject", motion=True, weight="T1", notes="ghosting")
+    a = Labels(quality="reject", motion=True, noise="noisy", weight="T1", notes="ghosting")
     store.save_labels("p1/s1", "alice", a, expected_weight="T2", seconds_spent=3.0)
     store.save_labels("p1/s1", "bob", Labels(), expected_weight="T2", seconds_spent=1.0)
 
@@ -35,10 +38,21 @@ def test_roundtrip_and_multiple_labelers(tmp_path):
 def test_relabel_overwrites_and_accumulates_time(tmp_path):
     store = _store_with_series(tmp_path)
     store.save_labels("p1/s1", "alice", Labels(), expected_weight=None, seconds_spent=2.0)
-    store.save_labels("p1/s1", "alice", Labels(noise=True), expected_weight=None, seconds_spent=1.5)
-    assert store.get_labels("p1/s1", "alice").noise is True
+    store.save_labels("p1/s1", "alice", Labels(noise="some"), expected_weight=None, seconds_spent=1.5)
+    assert store.get_labels("p1/s1", "alice").noise == "some"
     row = store.conn.execute("SELECT seconds_spent FROM labels").fetchone()
     assert row[0] == 3.5
+
+
+def test_old_database_is_rejected(tmp_path):
+    path = tmp_path / "labels.db"
+    LabelStore(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA user_version = 1")  # pretend it holds the previous label set
+    conn.commit()
+    conn.close()
+    with pytest.raises(SchemaMismatch):
+        LabelStore(path)
 
 
 def test_export(tmp_path):
