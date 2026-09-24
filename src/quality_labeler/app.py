@@ -42,7 +42,8 @@ HELP = """<b>Enter/Space</b> save &amp; next<br>
 <b>D</b> reset labels to defaults<br>
 <b>← / Backspace</b> previous series<br>
 <b>→ / S</b> skip without saving<br>
-<b>Tab / G</b> grid ↔ single slice<br>
+<b>Tab / G</b> grid ↔ single slice (full resolution)<br>
+<b>Z</b> zoom: auto / 1× / 2× / 4× · drag to pan<br>
 <b>↑ ↓</b> or wheel: change slice · click tile: open it<br>
 <b>Right-drag</b> window/level · <b>L</b> reset window"""
 
@@ -56,6 +57,7 @@ class LabelerWindow(QMainWindow):
         labeler: str,
         expected_weight: str | None,
         relabel: bool = False,
+        default_view: str = "grid",
     ):
         super().__init__()
         self.root, self.paths, self.store = root, paths, store
@@ -73,6 +75,7 @@ class LabelerWindow(QMainWindow):
 
         self.setWindowTitle(f"Quality labeler — {root}  [{labeler}]")
         self._build_ui()
+        self.view.default_single = default_view == "single"
         QApplication.instance().installEventFilter(self)
 
         start = self._next_index(-1)
@@ -400,6 +403,8 @@ class LabelerWindow(QMainWindow):
             self.view.step_slice(-1)
         elif key in (K.Key_Down, K.Key_PageDown):
             self.view.step_slice(1)
+        elif key == K.Key_Z:
+            self.view.cycle_zoom(-1 if shift else 1)
         elif key == K.Key_L:
             self.view.reset_window()
         else:

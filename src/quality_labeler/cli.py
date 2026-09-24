@@ -35,6 +35,7 @@ def _label(args):
         labeler=args.labeler,
         expected_weight=None if args.weight == "auto" else args.weight,
         relabel=args.relabel,
+        default_view=args.view,
     )
     window.resize(1600, 1000)
     window.show()
@@ -64,6 +65,12 @@ def main(argv: list[str] | None = None):
         help="expected weighting, used as the default label (auto: guess from DICOM header)",
     )
     p.add_argument("--labeler", default=getpass.getuser(), help="labeler name (default: $USER)")
+    p.add_argument(
+        "--view",
+        choices=("grid", "single"),
+        default="grid",
+        help="view each series opens in: grid overview, or one slice at full resolution",
+    )
     p.add_argument("--relabel", action="store_true", help="also step through series you already labeled")
     p.set_defaults(func=_label)
 
