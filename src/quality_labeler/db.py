@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .inference import HeaderInfo
+from .inference import HeaderInfo, is_interpolated
 from .schema import FLAGS, SCHEMA_VERSION, Labels
 
 SCHEMA = """
@@ -24,6 +24,15 @@ CREATE TABLE IF NOT EXISTS series (
     inversion_time REAL,
     flip_angle REAL,
     field_strength REAL,
+    rows INTEGER,
+    columns INTEGER,
+    acquired_rows INTEGER,
+    acquired_columns INTEGER,
+    pixel_spacing_row REAL,
+    pixel_spacing_column REAL,
+    slice_thickness REAL,
+    slice_spacing REAL,               -- measured from slice positions when available
+    interpolated INTEGER,             -- stored matrix larger than the acquired one
     num_slices INTEGER,
     num_files INTEGER,
     load_error TEXT,
@@ -112,6 +121,15 @@ class LabelStore:
             "inversion_time": info.inversion_time,
             "flip_angle": info.flip_angle,
             "field_strength": info.field_strength,
+            "rows": info.rows,
+            "columns": info.columns,
+            "acquired_rows": info.acquired[0] if info.acquired else None,
+            "acquired_columns": info.acquired[1] if info.acquired else None,
+            "pixel_spacing_row": info.pixel_spacing[0] if info.pixel_spacing else None,
+            "pixel_spacing_column": info.pixel_spacing[1] if info.pixel_spacing else None,
+            "slice_thickness": info.slice_thickness,
+            "slice_spacing": info.slice_spacing,
+            "interpolated": int(is_interpolated(info)),
             "num_slices": num_slices,
             "num_files": num_files,
             "load_error": load_error,

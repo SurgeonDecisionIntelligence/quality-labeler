@@ -12,3 +12,4 @@ wheels/
 # Label databases
 data/
 *.db
+

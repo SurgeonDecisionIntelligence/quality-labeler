@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from .db import LabelStore
 from .dicom_io import Series, series_key
-from .inference import guess_plane, guess_region, guess_weight
+from .inference import guess_plane, guess_region, guess_weight, resolution_summary
 from .prefetch import Prefetcher
 from .schema import FLAGS, NOISE, PLANES, QUALITY, REGIONS, WEIGHTS, Labels
 from .viewer import ImageView
@@ -42,7 +42,8 @@ HELP = """<b>Enter/Space</b> save &amp; next<br>
 <b>D</b> reset labels to defaults<br>
 <b>← / Backspace</b> previous series<br>
 <b>→ / S</b> skip without saving<br>
-<b>Tab / G</b> grid ↔ single slice<br>
+<b>Tab / G</b> grid ↔ single slice (full resolution)<br>
+<b>Z</b> zoom: auto / 1× / 2× / 4× · drag to pan<br>
 <b>↑ ↓</b> or wheel: change slice · click tile: open it<br>
 <b>Right-drag</b> window/level · <b>L</b> reset window"""
 
@@ -56,6 +57,7 @@ class LabelerWindow(QMainWindow):
         labeler: str,
         expected_weight: str | None,
         relabel: bool = False,
+        default_view: str = "grid",
     ):
         super().__init__()
         self.root, self.paths, self.store = root, paths, store
@@ -73,6 +75,7 @@ class LabelerWindow(QMainWindow):
 
         self.setWindowTitle(f"Quality labeler — {root}  [{labeler}]")
         self._build_ui()
+        self.view.default_single = default_view == "single"
         QApplication.instance().installEventFilter(self)
 
         start = self._next_index(-1)
@@ -250,11 +253,10 @@ class LabelerWindow(QMainWindow):
         saved = self.store.get_labels(series.key, self.labeler)
         self.set_labels(saved or self.defaults)
 
-        shape = f"{series.volume.shape[2]}×{series.volume.shape[1]}" if len(series.volume) else "-"
         parts = [
             f"<b>[{self.index + 1}/{len(self.paths)}]</b> {series.key}",
             info.series_description or "<i>no description</i>",
-            f"{len(series.volume)} slices · {shape}",
+            f"{len(series.volume)} slices",
         ]
         if series.n_skipped:
             parts.append(f"<span style='color:#d80'>{series.n_skipped} files not used</span>")
@@ -277,6 +279,7 @@ class LabelerWindow(QMainWindow):
         guess_w = g["weight"].value
         warn = guess_w is not None and guess_w != weight
         lines = [
+            resolution_summary(info),
             f"TE {fmt(info.echo_time)} · TR {fmt(info.repetition_time)} · "
             f"TI {fmt(info.inversion_time)} · FA {fmt(info.flip_angle)} · B0 {fmt(info.field_strength)}",
             f"Seq: {info.scanning_sequence or '–'} {info.sequence_name}",
@@ -400,6 +403,8 @@ class LabelerWindow(QMainWindow):
             self.view.step_slice(-1)
         elif key in (K.Key_Down, K.Key_PageDown):
             self.view.step_slice(1)
+        elif key == K.Key_Z:
+            self.view.cycle_zoom(-1 if shift else 1)
         elif key == K.Key_L:
             self.view.reset_window()
         else:

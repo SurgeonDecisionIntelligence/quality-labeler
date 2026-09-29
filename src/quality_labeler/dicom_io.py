@@ -56,8 +56,19 @@ def _float(ds: Dataset, name: str) -> float | None:
         return None
 
 
+def _acquired_matrix(ds: Dataset) -> tuple[int, int] | None:
+    """AcquisitionMatrix is [freq_rows, freq_cols, phase_rows, phase_cols], two of them zero."""
+    matrix = ds.get("AcquisitionMatrix")
+    if not matrix or len(matrix) != 4:
+        return None
+    freq_rows, freq_cols, phase_rows, phase_cols = (int(v) for v in matrix)
+    rows, cols = freq_rows or phase_rows, freq_cols or phase_cols
+    return (rows, cols) if rows and cols else None
+
+
 def header_info(ds: Dataset) -> HeaderInfo:
     iop = ds.get("ImageOrientationPatient")
+    spacing = ds.get("PixelSpacing")
     return HeaderInfo(
         series_uid=_str(ds, "SeriesInstanceUID") or None,
         study_uid=_str(ds, "StudyInstanceUID") or None,
@@ -75,6 +86,12 @@ def header_info(ds: Dataset) -> HeaderInfo:
         flip_angle=_float(ds, "FlipAngle"),
         field_strength=_float(ds, "MagneticFieldStrength"),
         orientation=tuple(float(v) for v in iop) if iop and len(iop) == 6 else None,
+        rows=int(ds.Rows) if "Rows" in ds else None,
+        columns=int(ds.Columns) if "Columns" in ds else None,
+        acquired=_acquired_matrix(ds),
+        pixel_spacing=(float(spacing[0]), float(spacing[1])) if spacing and len(spacing) == 2 else None,
+        slice_thickness=_float(ds, "SliceThickness"),
+        slice_spacing=_float(ds, "SpacingBetweenSlices"),
     )
 
 
@@ -139,13 +156,21 @@ def load_series(path: Path, root: Path) -> Series:
     spacing = ds0.get("PixelSpacing")
     aspect = float(spacing[0]) / float(spacing[1]) if spacing and float(spacing[1]) else 1.0
 
+    info = header_info(ds0)
+    # Prefer the spacing the positions actually show over SpacingBetweenSlices.
+    positions = [key[1] for key, _, _ in kept if key[0] == 0]
+    if len(positions) > 1:
+        gaps = np.diff(positions)
+        if np.any(gaps):
+            info.slice_spacing = float(np.median(np.abs(gaps)))
+
     return Series(
         key=key,
         path=path,
         volume=volume,
         pixel_aspect=aspect,
         window=auto_window(volume),
-        info=header_info(ds0),
+        info=info,
         n_files=len(files),
         n_skipped=len(files) - len(kept),
     )
