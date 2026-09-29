@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass, fields
 
-# Bump when the label set changes, so an older database is rejected instead of
-# being written to with mismatched columns.
-SCHEMA_VERSION = 2
+# Bump when the label set or the stored series metadata changes, so an older
+# database is rejected instead of being written to with mismatched columns.
+SCHEMA_VERSION = 3
 
 QUALITY = ("accept", "partially accept", "reject")
 NOISE = ("none", "some", "noisy")

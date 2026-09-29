@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from .db import LabelStore
 from .dicom_io import Series, series_key
-from .inference import guess_plane, guess_region, guess_weight
+from .inference import guess_plane, guess_region, guess_weight, resolution_summary
 from .prefetch import Prefetcher
 from .schema import FLAGS, NOISE, PLANES, QUALITY, REGIONS, WEIGHTS, Labels
 from .viewer import ImageView
@@ -253,11 +253,10 @@ class LabelerWindow(QMainWindow):
         saved = self.store.get_labels(series.key, self.labeler)
         self.set_labels(saved or self.defaults)
 
-        shape = f"{series.volume.shape[2]}×{series.volume.shape[1]}" if len(series.volume) else "-"
         parts = [
             f"<b>[{self.index + 1}/{len(self.paths)}]</b> {series.key}",
             info.series_description or "<i>no description</i>",
-            f"{len(series.volume)} slices · {shape}",
+            f"{len(series.volume)} slices",
         ]
         if series.n_skipped:
             parts.append(f"<span style='color:#d80'>{series.n_skipped} files not used</span>")
@@ -280,6 +279,7 @@ class LabelerWindow(QMainWindow):
         guess_w = g["weight"].value
         warn = guess_w is not None and guess_w != weight
         lines = [
+            resolution_summary(info),
             f"TE {fmt(info.echo_time)} · TR {fmt(info.repetition_time)} · "
             f"TI {fmt(info.inversion_time)} · FA {fmt(info.flip_angle)} · B0 {fmt(info.field_strength)}",
             f"Seq: {info.scanning_sequence or '–'} {info.sequence_name}",

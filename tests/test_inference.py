@@ -1,6 +1,14 @@
 import pytest
 
-from quality_labeler.inference import HeaderInfo, guess_plane, guess_region, guess_weight
+from quality_labeler.inference import (
+    HeaderInfo,
+    effective_spacing,
+    guess_plane,
+    guess_region,
+    guess_weight,
+    is_interpolated,
+    resolution_summary,
+)
 
 
 @pytest.mark.parametrize(
@@ -56,3 +64,47 @@ def test_weight(info, weight):
 )
 def test_region(info, region):
     assert guess_region(info).value == region
+
+
+@pytest.mark.parametrize(
+    "info, expected",
+    [
+        (
+            HeaderInfo(rows=640, columns=640, acquired=(320, 256), pixel_spacing=(0.55, 0.55),
+                       slice_thickness=4.0, slice_spacing=4.4),
+            "1.4 × 1.1 mm effective (0.55 mm grid) · 4 mm thick, 0.4 gap"
+            " · acquired 256×320 → 640×640 (interpolated)",
+        ),
+        (
+            HeaderInfo(rows=512, columns=512, acquired=(512, 512), pixel_spacing=(0.5, 0.5),
+                       slice_thickness=3.0, slice_spacing=3.0),
+            "0.5 mm · 3 mm thick · matrix 512×512",
+        ),
+        (
+            HeaderInfo(rows=256, columns=256, pixel_spacing=(0.9, 0.9),
+                       slice_thickness=4.0, slice_spacing=3.6),
+            "0.9 mm · 4 mm thick, 0.4 overlap · matrix 256×256",
+        ),
+        (HeaderInfo(), "no geometry in header"),
+    ],
+)
+def test_resolution_summary(info, expected):
+    assert resolution_summary(info) == expected
+
+
+def test_interpolation_detected_from_image_type():
+    assert is_interpolated(HeaderInfo(image_type="ORIGINAL\\PRIMARY\\M\\INTERPOLATED"))
+    assert not is_interpolated(HeaderInfo(rows=256, columns=256, acquired=(256, 256)))
+
+
+def test_effective_spacing_of_a_zero_filled_series():
+    """416 read x 224 phase reconstructed onto a 512 grid: the grid overstates detail."""
+    info = HeaderInfo(rows=512, columns=512, acquired=(224, 416), pixel_spacing=(0.4297, 0.4297))
+    col_mm, row_mm = effective_spacing(info)
+    assert col_mm == pytest.approx(0.529, abs=0.001)  # read direction
+    assert row_mm == pytest.approx(0.982, abs=0.001)  # phase direction, ~2x coarser
+    assert "0.53 × 0.98 mm effective (0.43 mm grid)" in resolution_summary(info)
+
+
+def test_effective_spacing_needs_both_matrices():
+    assert effective_spacing(HeaderInfo(rows=512, columns=512, pixel_spacing=(0.4, 0.4))) is None

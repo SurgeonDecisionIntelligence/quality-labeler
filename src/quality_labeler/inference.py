@@ -28,6 +28,12 @@ class HeaderInfo:
     flip_angle: float | None = None
     field_strength: float | None = None
     orientation: tuple[float, ...] | None = None  # ImageOrientationPatient
+    rows: int | None = None
+    columns: int | None = None
+    acquired: tuple[int, int] | None = None  # (rows, columns) actually sampled
+    pixel_spacing: tuple[float, float] | None = None  # (row mm, column mm)
+    slice_thickness: float | None = None
+    slice_spacing: float | None = None  # measured from slice positions when possible
 
 
 @dataclass
@@ -120,3 +126,66 @@ def guess_weight(info: HeaderInfo) -> Guess:
     if weight == "T1" and (info.contrast_agent or _CONTRAST.search(text.upper())):
         weight, reason = "T1+C", reason + " + contrast"
     return Guess(weight, reason)
+
+
+def is_interpolated(info: HeaderInfo) -> bool:
+    """True when the stored matrix is larger than what was acquired (e.g. zero filled)."""
+    if "INTERPOLATED" in info.image_type.upper():
+        return True
+    if info.acquired and info.rows and info.columns:
+        return info.acquired[0] < info.rows or info.acquired[1] < info.columns
+    return False
+
+
+def _fmt_mm(col_mm: float, row_mm: float) -> str:
+    """Width × height in mm, collapsed to one number when they are equal."""
+    if abs(col_mm - row_mm) < 0.01 * max(col_mm, row_mm):
+        return f"{col_mm:.2g} mm"
+    return f"{col_mm:.2g} × {row_mm:.2g} mm"
+
+
+def effective_spacing(info: HeaderInfo) -> tuple[float, float] | None:
+    """Millimetres per *acquired* sample (column, row), which is what limits detail.
+
+    The stored PixelSpacing describes the reconstruction grid, so a zero-filled
+    series reports a finer spacing than it actually resolves. The field of view is
+    the same either way, so dividing it by the acquired samples recovers the real
+    figure. Note the field of view already accounts for a rectangular (phase) FOV.
+    """
+    if not (info.pixel_spacing and info.acquired and info.rows and info.columns):
+        return None
+    acq_rows, acq_cols = info.acquired
+    if not (acq_rows and acq_cols):
+        return None
+    row_mm, col_mm = info.pixel_spacing
+    return (info.columns * col_mm / acq_cols, info.rows * row_mm / acq_rows)
+
+
+def resolution_summary(info: HeaderInfo) -> str:
+    """One line of the geometry a quality judgement depends on."""
+    parts = []
+    effective = effective_spacing(info)
+    if effective and is_interpolated(info):
+        row_mm, col_mm = info.pixel_spacing
+        parts.append(f"{_fmt_mm(*effective)} effective ({_fmt_mm(col_mm, row_mm)} grid)")
+    elif info.pixel_spacing:
+        row_mm, col_mm = info.pixel_spacing
+        parts.append(_fmt_mm(col_mm, row_mm))
+    if info.slice_thickness:
+        text = f"{info.slice_thickness:g} mm thick"
+        if info.slice_spacing:
+            gap = info.slice_spacing - info.slice_thickness
+            if gap >= 0.05:
+                text += f", {gap:g} gap"
+            elif gap <= -0.05:
+                text += f", {-gap:g} overlap"
+        parts.append(text)
+    if info.rows and info.columns:
+        stored = f"{info.columns}×{info.rows}"
+        if info.acquired and info.acquired != (info.rows, info.columns):
+            parts.append(f"acquired {info.acquired[1]}×{info.acquired[0]} → {stored}")
+        else:
+            parts.append(f"matrix {stored}")
+        if is_interpolated(info):
+            parts[-1] += " (interpolated)"
+    return " · ".join(parts) if parts else "no geometry in header"

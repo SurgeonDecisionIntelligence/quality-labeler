@@ -56,6 +56,24 @@ down; it area-averages (rather than point-sampling) and the status line states
 the scale, e.g. `tiles at 47% — Tab for full resolution`. Judge noise and fine
 artifacts in the single-slice view; `--view single` makes that the default.
 
+The panel also shows the geometry a quality judgement depends on, e.g.
+`0.53 × 0.98 mm effective (0.43 mm grid) · 4 mm thick, 0.4 gap · acquired
+416×224 → 512×512 (interpolated)`. "Interpolated" means the stored matrix is
+larger than the acquired one (zero filling on the scanner), so the extra pixels
+carry no extra information. The effective figure divides the field of view by
+the *acquired* samples, which is what actually limits detail; the grid figure is
+`PixelSpacing`, which only describes the reconstruction. They differ most in the
+phase-encoding direction, so an apparently isotropic 0.43 mm series can really
+be 0.53 × 0.98 mm.
+
+`AcquisitionMatrix` is vendor-dependent and does not capture partial Fourier or
+reconstruction filtering, so treat the effective figure as an upper bound on
+detail, not an exact measure. The same fields are stored per series,
+so label agreement can later be analysed against voxel size.
+
+Note that a lossy remote-desktop codec can discard exactly the high-frequency
+detail that noise labels depend on; use a lossless or near-lossless session.
+
 ## Defaults
 
 Labels start at: quality accept, noise none, all findings no. Region, plane and weight are
@@ -67,7 +85,9 @@ weight, and the header guess is highlighted when it disagrees.
 ## Database
 
 - `series`: one row per series: header values (TE, TR, TI, flip angle, field
-  strength, description, UIDs) and the header guesses (`guess_plane`,
+  strength, description, UIDs), geometry (`pixel_spacing_row/column`,
+  `slice_thickness`, `slice_spacing`, `rows`, `columns`, `acquired_rows`,
+  `acquired_columns`, `interpolated`) and the header guesses (`guess_plane`,
   `guess_region`, `guess_weight`, `guess_weight_reason`).
 - `labels`: one row per (series, labeler): the labels, notes, `expected_weight`
   (the `--weight` passed at runtime), and `seconds_spent`.

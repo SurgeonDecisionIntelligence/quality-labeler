@@ -19,6 +19,9 @@ def write_series(
     description: str = "SAG T2 TSE",
     te: float = 100.0,
     tr: float = 3500.0,
+    thickness: float = 4.0,
+    slice_gap: float = 0.0,
+    acquired=None,
     shuffle: bool = True,
 ) -> list[float]:
     """Write n slices whose pixel value encodes the slice's spatial order; return positions."""
@@ -44,8 +47,12 @@ def write_series(
         ds.EchoTime, ds.RepetitionTime = te, tr
         ds.InstanceNumber = file_idx + 1
         ds.ImageOrientationPatient = orientation
-        ds.ImagePositionPatient = [float(v) for v in normal * pos * 4.0]
+        ds.ImagePositionPatient = [float(v) for v in normal * pos * (thickness + slice_gap)]
         ds.PixelSpacing = [0.5, 0.5]
+        ds.SliceThickness = thickness
+        ds.SpacingBetweenSlices = thickness + slice_gap
+        if acquired:
+            ds.AcquisitionMatrix = [acquired[0], 0, 0, acquired[1]]
         ds.Rows, ds.Columns = rows, cols
         ds.SamplesPerPixel = 1
         ds.PhotometricInterpretation = "MONOCHROME2"
@@ -53,7 +60,8 @@ def write_series(
         ds.PixelRepresentation = 0
         ds.PixelData = np.full((rows, cols), pos * 10, np.uint16).tobytes()
         ds.save_as(folder / f"IM{file_idx:04d}.dcm", enforce_file_format=True)
-    return sorted(float(np.dot(normal, normal * p * 4.0)) for p in range(n))
+    spacing = thickness + slice_gap
+    return sorted(float(np.dot(normal, normal * p * spacing)) for p in range(n))
 
 
 @pytest.fixture
