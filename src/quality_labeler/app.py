@@ -1,6 +1,7 @@
 """Main labeling window. Keyboard-first: a clean series is a single Enter press."""
 
 import time
+from html import escape
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -27,21 +29,21 @@ from .db import LabelStore
 from .dicom_io import Series, series_key
 from .inference import guess_plane, guess_region, guess_weight, resolution_summary
 from .prefetch import Prefetcher
-from .schema import FLAGS, NOISE, PLANES, QUALITY, REGIONS, WEIGHTS, Labels
+from .schema import FLAGS, GRADES, PLANES, QUALITY, REGIONS, SCALES, WEIGHTS, Labels
 from .viewer import ImageView
 
 NO_FOCUS = Qt.FocusPolicy.NoFocus
 K = Qt.Key
 
 HELP = """<b>Enter/Space</b> save &amp; next<br>
-<b>1 2 3</b> accept / partially accept / reject<br>
-<b>N</b> cycle noise: none / some / noisy<br>
-<b>M F C H A I</b> toggle findings<br>
+<b>1…5</b> quality (1 = best) · <b>Q</b> cycles it<br>
+<b>N M F C H A</b> cycle a finding 1→2→3 (Shift = back)<br>
+<b>I</b> improper acquisition · <b>S</b> fat suppression<br>
 <b>R P W</b> cycle region / plane / weight (Shift = back)<br>
 <b>T</b> or <b>/</b> type notes (Esc leaves)<br>
 <b>D</b> reset labels to defaults<br>
 <b>← / Backspace</b> previous series<br>
-<b>→ / S</b> skip without saving<br>
+<b>→</b> skip without saving<br>
 <b>Tab / G</b> grid ↔ single slice (full resolution)<br>
 <b>Z</b> zoom: auto / 1× / 2× / 4× · drag to pan<br>
 <b>↑ ↓</b> or wheel: change slice · click tile: open it<br>
@@ -97,11 +99,11 @@ class LabelerWindow(QMainWindow):
 
         panel = QVBoxLayout()
 
-        self.radios: dict[str, dict[str, QRadioButton]] = {}
-        panel.addWidget(self._radio_row("Quality", "quality", QUALITY, per_option_keys=True))
-        panel.addWidget(self._radio_row("Noise [N]", "noise", NOISE))
+        self.radios: dict[str, dict[int, QRadioButton]] = {}
+        panel.addWidget(self._quality_box())
+        panel.addWidget(self._grades_box())
 
-        flag_box = QGroupBox("Findings")
+        flag_box = QGroupBox("Yes / no")
         flay = QVBoxLayout(flag_box)
         self.flag_boxes = {}
         for f in FLAGS:
@@ -154,17 +156,39 @@ class LabelerWindow(QMainWindow):
         lay.addWidget(side)
         self.setCentralWidget(central)
 
-    def _radio_row(self, title: str, name: str, options, per_option_keys: bool = False) -> QGroupBox:
-        box = QGroupBox(title)
-        lay = QHBoxLayout(box)
-        group = QButtonGroup(box)
-        self.radios[name] = {}
-        for i, option in enumerate(options):
-            text = f"{option} [{i + 1}]" if per_option_keys else option
-            b = QRadioButton(text, focusPolicy=NO_FOCUS)
+    def _buttons(self, scale, parent) -> list[QRadioButton]:
+        """One exclusive radio button per value of an ordinal scale."""
+        group = QButtonGroup(parent)
+        self.radios[scale.name] = {}
+        buttons = []
+        for value in scale.values:
+            b = QRadioButton(str(value), focusPolicy=NO_FOCUS)
             group.addButton(b)
-            self.radios[name][option] = b
+            self.radios[scale.name][value] = b
+            buttons.append(b)
+        return buttons
+
+    def _quality_box(self) -> QGroupBox:
+        box = QGroupBox(f"Quality [{QUALITY.values[0]}–{QUALITY.values[-1]}]   1 = best")
+        lay = QHBoxLayout(box)
+        for b in self._buttons(QUALITY, box):
             lay.addWidget(b)
+        return box
+
+    def _grades_box(self) -> QGroupBox:
+        """The graded findings, one compact row each: label then 1 2 3."""
+        box = QGroupBox("Findings   1 = none · 3 = severe")
+        grid = QGridLayout(box)
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(2)
+        for column, value in enumerate(GRADES[0].values):
+            grid.addWidget(QLabel(f"<b>{value}</b>"), 0, column + 1, Qt.AlignmentFlag.AlignHCenter)
+        for row, scale in enumerate(GRADES, start=1):
+            grid.addWidget(QLabel(f"{scale.label} [{scale.key}]"), row, 0)
+            for column, b in enumerate(self._buttons(scale, box)):
+                b.setText("")  # the column header carries the number
+                grid.addWidget(b, row, column + 1, Qt.AlignmentFlag.AlignHCenter)
+        grid.setColumnStretch(0, 1)
         return box
 
     # --- labels <-> widgets ----------------------------------------------
@@ -254,8 +278,8 @@ class LabelerWindow(QMainWindow):
         self.set_labels(saved or self.defaults)
 
         parts = [
-            f"<b>[{self.index + 1}/{len(self.paths)}]</b> {series.key}",
-            info.series_description or "<i>no description</i>",
+            f"<b>[{self.index + 1}/{len(self.paths)}]</b> {escape(series.key)}",
+            escape(info.series_description) or "<i>no description</i>",
             f"{len(series.volume)} slices",
         ]
         if series.n_skipped:
@@ -279,11 +303,12 @@ class LabelerWindow(QMainWindow):
         guess_w = g["weight"].value
         warn = guess_w is not None and guess_w != weight
         lines = [
+            f"<b>Series: {escape(info.series_description) or '–'}</b>",
             resolution_summary(info),
             f"TE {fmt(info.echo_time)} · TR {fmt(info.repetition_time)} · "
             f"TI {fmt(info.inversion_time)} · FA {fmt(info.flip_angle)} · B0 {fmt(info.field_strength)}",
-            f"Seq: {info.scanning_sequence or '–'} {info.sequence_name}",
-            f"Protocol: {info.protocol_name or '–'}",
+            f"Seq: {escape(info.scanning_sequence) or '–'} {escape(info.sequence_name)}",
+            f"Protocol: {escape(info.protocol_name) or '–'}",
             ("<span style='color:#e70'><b>" if warn else "")
             + f"Header weight guess: {guess_w or '?'} ({g['weight'].reason})"
             + ("</b></span>" if warn else ""),
@@ -378,13 +403,11 @@ class LabelerWindow(QMainWindow):
         elif key in (K.Key_Left, K.Key_Backspace):
             if not e.isAutoRepeat():
                 self.go_previous()
-        elif key in (K.Key_Right, K.Key_S):
+        elif key == K.Key_Right:
             if not e.isAutoRepeat():
                 self.skip()
-        elif K.Key_1 <= key < K.Key_1 + len(QUALITY):
-            self.radios["quality"][QUALITY[key - K.Key_1]].setChecked(True)
-        elif key == K.Key_N:
-            self._cycle("noise", -1 if shift else 1)
+        elif K.Key_1 <= key < K.Key_1 + len(QUALITY.values):
+            self.radios["quality"][QUALITY.values[key - K.Key_1]].setChecked(True)
         elif key == K.Key_R:
             self._cycle("region", -1 if shift else 1)
         elif key == K.Key_P:
@@ -408,6 +431,10 @@ class LabelerWindow(QMainWindow):
         elif key == K.Key_L:
             self.view.reset_window()
         else:
+            for scale in SCALES:
+                if key == getattr(K, f"Key_{scale.key}"):
+                    self._cycle(scale.name, -1 if shift else 1)
+                    return True
             for f in FLAGS:
                 if key == getattr(K, f"Key_{f.key}"):
                     cb = self.flag_boxes[f.name]

@@ -4,45 +4,66 @@ from dataclasses import dataclass, fields
 
 # Bump when the label set or the stored series metadata changes, so an older
 # database is rejected instead of being written to with mismatched columns.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
-QUALITY = ("accept", "partially accept", "reject")
-NOISE = ("none", "some", "noisy")
 REGIONS = ("lumbar", "cervical", "thoracic")
 PLANES = ("sagittal", "coronal", "axial")
 WEIGHTS = ("T1", "T1+C", "T2", "PD", "STIR", "FLAIR", "T2*", "DWI", "other")
 
 
 @dataclass(frozen=True)
-class Flag:
+class Scale:
+    """An ordinal label. 1 is always the clean end: best quality, no artifact."""
+
     name: str  # database column / Labels attribute
     label: str  # UI text
-    key: str  # keyboard shortcut
+    key: str  # keyboard shortcut, cycles upwards (Shift cycles back)
+    values: tuple[int, ...]
 
 
-FLAGS = (
-    Flag("motion", "Motion artifact", "M"),
-    Flag("field_inhomogeneity", "Field inhomogeneity", "F"),
-    Flag("clipping", "Clipping", "C"),
-    Flag("hardware", "Hardware", "H"),
-    Flag("misc_artifact", "Misc artifact", "A"),
-    Flag("improper_acquisition", "Improper acquisition", "I"),
+@dataclass(frozen=True)
+class Flag:
+    """A yes/no label."""
+
+    name: str
+    label: str
+    key: str
+
+
+QUALITY_VALUES = (1, 2, 3, 4, 5)
+GRADE_VALUES = (1, 2, 3)
+
+QUALITY = Scale("quality", "Quality", "Q", QUALITY_VALUES)
+
+# Graded findings, shown as one compact 1-2-3 row each.
+GRADES = (
+    Scale("noise", "Noise", "N", GRADE_VALUES),
+    Scale("motion", "Motion artifact", "M", GRADE_VALUES),
+    Scale("field_inhomogeneity", "Field inhomogeneity", "F", GRADE_VALUES),
+    Scale("clipping", "Clipping", "C", GRADE_VALUES),
+    Scale("hardware", "Hardware", "H", GRADE_VALUES),
+    Scale("misc_artifact", "Misc artifact", "A", GRADE_VALUES),
 )
 
-# Ordinal scales, shown as a row of radio buttons and cycled with one key.
-SCALES = {"quality": QUALITY, "noise": NOISE}
+SCALES = (QUALITY, *GRADES)
+
+FLAGS = (
+    Flag("improper_acquisition", "Improper acquisition", "I"),
+    Flag("fat_suppression", "Fat suppression", "S"),
+)
 
 
 @dataclass
 class Labels:
-    quality: str = "accept"
-    noise: str = "none"
-    motion: bool = False
-    field_inhomogeneity: bool = False
-    clipping: bool = False
-    hardware: bool = False
-    misc_artifact: bool = False
+    quality: int = 1
+    noise: int = 1
+    motion: int = 1
+    field_inhomogeneity: int = 1
+    clipping: int = 1
+    hardware: int = 1
+    misc_artifact: int = 1
     improper_acquisition: bool = False
+    fat_suppression: bool = False
     region: str = "lumbar"
     plane: str = "sagittal"
     weight: str = "T2"

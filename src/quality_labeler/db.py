@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .inference import HeaderInfo, is_interpolated
-from .schema import FLAGS, SCHEMA_VERSION, Labels
+from .schema import FLAGS, SCALES, SCHEMA_VERSION, Labels
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS series (
@@ -45,14 +45,15 @@ CREATE TABLE IF NOT EXISTS series (
 CREATE TABLE IF NOT EXISTS labels (
     series_key TEXT NOT NULL REFERENCES series(series_key),
     labeler TEXT NOT NULL,
-    quality TEXT NOT NULL,
-    noise TEXT NOT NULL,
+    quality INTEGER NOT NULL,            -- 1 (best) .. 5 (worst)
+    noise INTEGER NOT NULL,              -- the graded findings below are 1 (none) .. 3 (severe)
     motion INTEGER NOT NULL,
     field_inhomogeneity INTEGER NOT NULL,
     clipping INTEGER NOT NULL,
     hardware INTEGER NOT NULL,
     misc_artifact INTEGER NOT NULL,
-    improper_acquisition INTEGER NOT NULL,
+    improper_acquisition INTEGER NOT NULL,   -- 0/1
+    fat_suppression INTEGER NOT NULL,        -- 0/1
     region TEXT NOT NULL,
     plane TEXT NOT NULL,
     weight TEXT NOT NULL,
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS labels (
 
 _LABEL_COLS = Labels.field_names()
 _BOOL_COLS = {f.name for f in FLAGS}
+_INT_COLS = {s.name for s in SCALES}
 
 
 class SchemaMismatch(RuntimeError):
@@ -185,7 +187,12 @@ class LabelStore:
         ).fetchone()
         if row is None:
             return None
-        return Labels(**{c: bool(row[c]) if c in _BOOL_COLS else row[c] for c in _LABEL_COLS})
+        def value(column):
+            if column in _BOOL_COLS:
+                return bool(row[column])
+            return int(row[column]) if column in _INT_COLS else row[column]
+
+        return Labels(**{c: value(c) for c in _LABEL_COLS})
 
     def labeled_keys(self, labeler: str) -> set[str]:
         rows = self.conn.execute("SELECT series_key FROM labels WHERE labeler = ?", (labeler,))
