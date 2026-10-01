@@ -76,11 +76,18 @@ detail that noise labels depend on; use a lossless or near-lossless session.
 
 ## Defaults
 
-Labels start at: quality accept, noise none, all findings no. Region, plane and weight are
-pre-filled from the header when possible (`ImageOrientationPatient` for plane;
-BodyPartExamined/descriptions for region; description, then TE/TR/TI for weight),
-falling back to lumbar / sagittal / other. If `--weight` is given it is the default
-weight, and the header guess is highlighted when it disagrees.
+Labels start at the clean end of every scale: quality 1, each graded finding 1,
+both yes/no labels off. Region, plane and weight are pre-filled from the header
+when possible (`ImageOrientationPatient` for plane; BodyPartExamined and the
+descriptions for region; description, then TE/TR/TI for weight), falling back to
+lumbar / sagittal / other. If `--weight` is given it is the default weight, and
+the header guess is highlighted when it disagrees.
+
+Region is `lumbar`, `cervical`, `thoracic` or `other`. A header naming a body
+part outside the spine (brain, hip, pelvis, knee, abdomen, sacrum, …) defaults to
+`other`; a spine keyword in the same field still wins, so "L-SPINE AND PELVIS"
+reads as lumbar. A header with no recognisable region keyword at all still falls
+back to `lumbar`, so review that field on non-spine-heavy datasets.
 
 ## Database
 

@@ -60,10 +60,24 @@ def test_weight(info, weight):
         (HeaderInfo(series_description="T-SPINE SAG T2"), "thoracic"),
         (HeaderInfo(study_description="MRI LUMBAR SPINE"), "lumbar"),
         (HeaderInfo(series_description="SAG T2"), None),  # "T2" must not read as thoracic
+        # Anything recognisably outside the spine defaults to "other".
+        (HeaderInfo(body_part="BRAIN"), "other"),
+        (HeaderInfo(body_part="HIP"), "other"),
+        (HeaderInfo(body_part="PELVIS"), "other"),
+        (HeaderInfo(body_part="KNEE"), "other"),
+        (HeaderInfo(study_description="MRI ABDOMEN"), "other"),
+        (HeaderInfo(body_part="SACRUM"), "other"),
+        # A spine match in the same field still wins.
+        (HeaderInfo(series_description="L-SPINE AND PELVIS"), "lumbar"),
+        (HeaderInfo(body_part="CSPINE", series_description="NECK COIL"), "cervical"),
     ],
 )
 def test_region(info, region):
     assert guess_region(info).value == region
+
+
+def test_non_spine_guess_says_why():
+    assert guess_region(HeaderInfo(body_part="BRAIN")).reason == "BodyPartExamined, non-spine"
 
 
 @pytest.mark.parametrize(

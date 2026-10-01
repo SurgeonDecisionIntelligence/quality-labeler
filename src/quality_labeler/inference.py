@@ -56,6 +56,17 @@ _REGION_PATTERNS = (
     ("lumbar", re.compile(r"\bL[\s_-]?SPINE|LUMBAR|\bL[\s_-]?S[\s_-]?SPINE")),
 )
 
+# Body parts that are clearly not one of the three spine regions. Matched only
+# after the spine patterns above, so "L-SPINE AND PELVIS" still reads as lumbar.
+_NON_SPINE = re.compile(
+    r"\bBRAIN|\bHEAD\b|\bNEURO|SKULL|ORBIT|PITUITAR|\bIAC\b|\bTMJ\b|SINUS|\bNECK\b"
+    r"|\bHIPS?\b|PELVI|FEMUR|FEMORAL|ACETABUL|\bKNEE|TIBIA|FIBULA|ANKLE|\bFOOT|CALCANE"
+    r"|SHOULDER|CLAVICLE|HUMER|ELBOW|FOREARM|\bRADIUS|\bULNA|WRIST|\bHAND\b|FINGER|THUMB"
+    r"|ABDOMEN|ABDO\b|LIVER|PANCREA|KIDNEY|RENAL|ADRENAL|PROSTATE|BLADDER|UTER|OVAR|RECTUM"
+    r"|CHEST|THORAX|\bLUNG|BREAST|CARDIAC|\bHEART|AORTA"
+    r"|SACR|\bSI[\s_-]?JOINT|WHOLE[\s_-]?SPINE|TOTAL[\s_-]?SPINE"
+)
+
 
 def guess_region(info: HeaderInfo) -> Guess:
     for source, text in (
@@ -68,6 +79,8 @@ def guess_region(info: HeaderInfo) -> Guess:
         for region, pattern in _REGION_PATTERNS:
             if pattern.search(text):
                 return Guess(region, source)
+        if _NON_SPINE.search(text):
+            return Guess("other", f"{source}, non-spine")
     return Guess(None, "no region keyword")
 
 

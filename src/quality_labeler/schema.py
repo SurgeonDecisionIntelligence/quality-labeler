@@ -6,7 +6,7 @@ from dataclasses import dataclass, fields
 # database is rejected instead of being written to with mismatched columns.
 SCHEMA_VERSION = 4
 
-REGIONS = ("lumbar", "cervical", "thoracic")
+REGIONS = ("lumbar", "cervical", "thoracic", "other")
 PLANES = ("sagittal", "coronal", "axial")
 WEIGHTS = ("T1", "T1+C", "T2", "PD", "STIR", "FLAIR", "T2*", "DWI", "other")
 
