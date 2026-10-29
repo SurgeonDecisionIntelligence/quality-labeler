@@ -1,9 +1,10 @@
 import csv
 import sqlite3
+from pathlib import Path
 
 import pytest
 
-from quality_labeler.db import LabelStore, SchemaMismatch
+from quality_labeler.db import AmbiguousHistory, LabelStore, SchemaMismatch
 from quality_labeler.inference import HeaderInfo
 from quality_labeler.schema import Labels
 
@@ -14,6 +15,7 @@ def _store_with_series(tmp_path):
         "p1/s1",
         tmp_path,
         HeaderInfo(series_uid="1.2.3", echo_time=100.0),
+        series_uid="1.2.3",
         num_slices=12,
         num_files=12,
         load_error=None,
@@ -26,20 +28,20 @@ def _store_with_series(tmp_path):
 def test_roundtrip_and_multiple_labelers(tmp_path):
     store = _store_with_series(tmp_path)
     a = Labels(quality=5, motion=3, noise=3, fat_suppression=True, weight="T1", notes="ghosting")
-    store.save_labels("p1/s1", "alice", a, expected_weight="T2", seconds_spent=3.0)
-    store.save_labels("p1/s1", "bob", Labels(), expected_weight="T2", seconds_spent=1.0)
+    store.save_labels("1.2.3", "alice", a, series_key="p1/s1", expected_weight="T2", seconds_spent=3.0)
+    store.save_labels("1.2.3", "bob", Labels(), series_key="p1/s1", expected_weight="T2", seconds_spent=1.0)
 
-    assert store.get_labels("p1/s1", "alice") == a
-    assert store.get_labels("p1/s1", "bob") == Labels()
-    assert store.get_labels("p1/s1", "carol") is None
-    assert store.labeled_keys("alice") == {"p1/s1"}
+    assert store.get_labels("1.2.3", "alice") == a
+    assert store.get_labels("1.2.3", "bob") == Labels()
+    assert store.get_labels("1.2.3", "carol") is None
+    assert store.labeled_uids("alice") == {"1.2.3"}
 
 
 def test_relabel_overwrites_and_accumulates_time(tmp_path):
     store = _store_with_series(tmp_path)
-    store.save_labels("p1/s1", "alice", Labels(), expected_weight=None, seconds_spent=2.0)
-    store.save_labels("p1/s1", "alice", Labels(noise=2), expected_weight=None, seconds_spent=1.5)
-    assert store.get_labels("p1/s1", "alice").noise == 2
+    store.save_labels("1.2.3", "alice", Labels(), series_key="p1/s1", expected_weight=None, seconds_spent=2.0)
+    store.save_labels("1.2.3", "alice", Labels(noise=2), series_key="p1/s1", expected_weight=None, seconds_spent=1.5)
+    assert store.get_labels("1.2.3", "alice").noise == 2
     row = store.conn.execute("SELECT seconds_spent FROM labels").fetchone()
     assert row[0] == 3.5
 
@@ -47,10 +49,10 @@ def test_relabel_overwrites_and_accumulates_time(tmp_path):
 def test_scales_round_trip_as_integers(tmp_path):
     store = _store_with_series(tmp_path)
     store.save_labels(
-        "p1/s1", "alice", Labels(quality=4, hardware=3, misc_artifact=2),
-        expected_weight=None, seconds_spent=1.0,
+        "1.2.3", "alice", Labels(quality=4, hardware=3, misc_artifact=2),
+        series_key="p1/s1", expected_weight=None, seconds_spent=1.0,
     )
-    got = store.get_labels("p1/s1", "alice")
+    got = store.get_labels("1.2.3", "alice")
     assert (got.quality, got.hardware, got.misc_artifact) == (4, 3, 2)
     assert got.improper_acquisition is False and got.fat_suppression is False
 
@@ -69,8 +71,8 @@ def test_old_database_is_rejected(tmp_path):
 def test_export(tmp_path):
     store = _store_with_series(tmp_path)
     store.save_labels(
-        "p1/s1", "alice", Labels(clipping=2, improper_acquisition=True),
-        expected_weight="T2", seconds_spent=1,
+        "1.2.3", "alice", Labels(clipping=2, improper_acquisition=True),
+        series_key="p1/s1", expected_weight="T2", seconds_spent=1,
     )
     out = tmp_path / "out.csv"
     assert store.export_csv(out) == 1
@@ -81,3 +83,23 @@ def test_export(tmp_path):
     assert row["quality"] == "1"  # the clean default
     assert row["guess_weight"] == "T2"
     assert row["series_uid"] == "1.2.3"
+
+
+def test_a_moved_series_updates_its_path_instead_of_duplicating(tmp_path):
+    """Same UID, new folder: one row, path refreshed."""
+    store = _store_with_series(tmp_path)
+    store.save_labels("1.2.3", "alice", Labels(quality=3), series_key="p1/s1",
+                      expected_weight=None, seconds_spent=1.0)
+    store.save_labels("1.2.3", "alice", Labels(quality=3), series_key="moved/elsewhere",
+                      expected_weight=None, seconds_spent=1.0)
+    rows = store.conn.execute("SELECT series_key FROM labels WHERE series_uid = '1.2.3'").fetchall()
+    assert [r[0] for r in rows] == ["moved/elsewhere"]
+
+
+def test_uid_cache_round_trip(tmp_path):
+    store = LabelStore(tmp_path / "labels.db")
+    store.remember_uids(Path("/data"), {"p1/s1": ("1.2.3", 123.0)})
+    assert store.cached_uids(Path("/data")) == {"p1/s1": ("1.2.3", 123.0)}
+    assert store.cached_uids(Path("/other")) == {}
+    store.remember_uids(Path("/data"), {"p1/s1": ("9.9.9", 456.0)})
+    assert store.cached_uids(Path("/data")) == {"p1/s1": ("9.9.9", 456.0)}

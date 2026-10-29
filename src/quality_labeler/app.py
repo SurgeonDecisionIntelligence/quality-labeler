@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .db import LabelStore
-from .dicom_io import Series, series_key
+from .dicom_io import ScanEntry, Series
 from .inference import guess_plane, guess_region, guess_weight, resolution_summary
 from .prefetch import Prefetcher
 from .schema import FLAGS, GRADES, PLANES, QUALITY, REGIONS, SCALES, WEIGHTS, Labels
@@ -54,7 +54,7 @@ class LabelerWindow(QMainWindow):
     def __init__(
         self,
         root: Path,
-        paths: list[Path],
+        entries: list[ScanEntry],
         store: LabelStore,
         labeler: str,
         expected_weight: str | None,
@@ -62,12 +62,15 @@ class LabelerWindow(QMainWindow):
         default_view: str = "grid",
     ):
         super().__init__()
-        self.root, self.paths, self.store = root, paths, store
+        self.root, self.entries, self.store = root, entries, store
+        self.paths = [e.path for e in entries]
+        self.uids = [e.uid for e in entries]
         self.labeler, self.expected_weight = labeler, expected_weight
-        self.keys = [series_key(p, root) for p in paths]
-        self.labeled = store.labeled_keys(labeler) & set(self.keys)
+        # A series is "done" by SeriesInstanceUID, so moving or renaming folders
+        # does not make previously labeled series come back.
+        self.labeled = store.labeled_uids(labeler) & set(self.uids)
         self.relabel = relabel
-        self.prefetcher = Prefetcher(paths, root)
+        self.prefetcher = Prefetcher(self.paths, root)
         self.index = -1
         self.series: Series | None = None
         self.defaults = Labels()
@@ -224,7 +227,7 @@ class LabelerWindow(QMainWindow):
 
     # --- navigation ------------------------------------------------------
     def _is_done(self, i: int) -> bool:
-        return not self.relabel and self.keys[i] in self.labeled
+        return not self.relabel and self.uids[i] in self.labeled
 
     def _upcoming(self, i: int) -> list[int]:
         return [j for j in range(i + 1, min(len(self.paths), i + 50)) if not self._is_done(j)]
@@ -274,7 +277,8 @@ class LabelerWindow(QMainWindow):
             plane=self.guesses["plane"].value or "sagittal",
             weight=self.expected_weight or self.guesses["weight"].value or "other",
         )
-        saved = self.store.get_labels(series.key, self.labeler)
+        entry = self.entries[self.index]
+        saved = self.store.get_labels(entry.uid, self.labeler)
         self.set_labels(saved or self.defaults)
 
         parts = [
@@ -284,6 +288,14 @@ class LabelerWindow(QMainWindow):
         ]
         if series.n_skipped:
             parts.append(f"<span style='color:#d80'>{series.n_skipped} files not used</span>")
+        if not entry.has_uid:
+            parts.append(
+                "<span style='color:#d80'>no SeriesInstanceUID — labeled by path</span>"
+            )
+        elif series.info.series_uid and series.info.series_uid != entry.uid:
+            parts.append(
+                "<span style='color:#d80'>folder holds more than one SeriesInstanceUID</span>"
+            )
         if saved:
             parts.append("<span style='color:#2a2'>✓ already labeled (editing)</span>")
         self.info.setText(" · ".join(parts))
@@ -329,10 +341,12 @@ class LabelerWindow(QMainWindow):
             self.statusBar().showMessage("Still loading — not saved", 2000)
             return
         s = self.series
+        entry = self.entries[self.index]
         self.store.upsert_series(
             s.key,
             self.root,
             s.info,
+            series_uid=entry.uid,
             num_slices=len(s.volume),
             num_files=s.n_files,
             load_error=s.error,
@@ -344,13 +358,14 @@ class LabelerWindow(QMainWindow):
             },
         )
         self.store.save_labels(
-            s.key,
+            entry.uid,
             self.labeler,
             self.current_labels(),
+            series_key=s.key,
             expected_weight=self.expected_weight,
             seconds_spent=round(time.monotonic() - self.shown_at, 2),
         )
-        self.labeled.add(s.key)
+        self.labeled.add(entry.uid)
         self.notes.clearFocus()
         nxt = self._next_index(self.index)
         if nxt is None:

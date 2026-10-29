@@ -1,7 +1,13 @@
-"""Discover series folders and load them into a sorted volume."""
+"""Discover series folders and load them into a sorted volume.
+
+A series is identified by its SeriesInstanceUID, not by where it sits on disk, so
+labels survive the data being moved or renamed. Learning the UID means reading one
+header per folder, which the caller caches (see LabelStore.cached_uids).
+"""
 
 import os
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,7 +32,87 @@ class Series:
 
 
 def series_key(path: Path, root: Path) -> str:
+    """Where the series sits, relative to the labeling root. For display, not identity."""
     return str(path.relative_to(root)) if path != root else "."
+
+
+@dataclass(frozen=True)
+class ScanEntry:
+    """One series folder and the identity its labels are stored under."""
+
+    path: Path
+    key: str  # path relative to the root
+    uid: str  # SeriesInstanceUID, or "nouid:<key>" when the header has none
+    dir_mtime: float
+
+    @property
+    def has_uid(self) -> bool:
+        return not self.uid.startswith("nouid:")
+
+
+def read_series_uid(path: Path) -> str | None:
+    """The SeriesInstanceUID of the first readable DICOM file in a folder."""
+    try:
+        files = sorted(f for f in path.iterdir() if f.is_file() and not f.name.startswith("."))
+    except OSError:
+        return None
+    for f in files:
+        try:
+            ds = pydicom.dcmread(
+                f, stop_before_pixels=True, specific_tags=["SeriesInstanceUID"], force=True
+            )
+        except Exception:
+            continue
+        uid = ds.get("SeriesInstanceUID")
+        if uid:
+            return str(uid)
+    return None
+
+
+def scan_identities(
+    paths: list[Path],
+    root: Path,
+    cached: dict[str, tuple[str, float]] | None = None,
+    workers: int = 8,
+    progress=None,
+) -> tuple[list[ScanEntry], dict[str, tuple[str, float]]]:
+    """Resolve every folder to a UID, reusing cached answers whose folder is unchanged.
+
+    Returns the entries and the subset that had to be read, for the caller to cache.
+    """
+    cached = cached or {}
+
+    def resolve(path: Path) -> tuple[ScanEntry, bool]:
+        key = series_key(path, root)
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        hit = cached.get(key)
+        if hit is not None and hit[1] == mtime:
+            return ScanEntry(path, key, hit[0], mtime), False
+        uid = read_series_uid(path) or f"nouid:{key}"
+        return ScanEntry(path, key, uid, mtime), True
+
+    entries, fresh = [], {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for i, (entry, was_read) in enumerate(pool.map(resolve, paths), start=1):
+            entries.append(entry)
+            if was_read:
+                fresh[entry.key] = (entry.uid, entry.dir_mtime)
+            if progress is not None:
+                progress(i, len(paths))
+    return entries, fresh
+
+
+def deduplicate(entries: list[ScanEntry]) -> tuple[list[ScanEntry], list[ScanEntry]]:
+    """Split off folders repeating a UID already seen: the same series exported twice."""
+    seen: set[str] = set()
+    unique, duplicates = [], []
+    for entry in entries:
+        (duplicates if entry.uid in seen else unique).append(entry)
+        seen.add(entry.uid)
+    return unique, duplicates
 
 
 def discover_series(root: Path) -> list[Path]:

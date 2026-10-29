@@ -89,6 +89,23 @@ part outside the spine (brain, hip, pelvis, knee, abdomen, sacrum, …) defaults
 reads as lumbar. A header with no recognisable region keyword at all still falls
 back to `lumbar`, so review that field on non-spine-heavy datasets.
 
+## How a series is identified
+
+A series is identified by its DICOM `SeriesInstanceUID`, so folders can be
+renamed or moved without previously labeled series coming back. Startup reads one
+header per folder to learn the UID; the answers are cached per folder in the
+`uid_cache` table, keyed on the folder's modification time, so later runs re-read
+nothing. Folders with no readable UID fall back to `nouid:<path>`, and a folder
+repeating a UID already seen is reported and skipped as a duplicate export.
+
+Databases written by earlier, path-keyed versions are **migrated in place on
+open**: `labels` gains a `series_uid` column, backfilled from the `series` table.
+No labels are lost, no new file is needed, and the change is additive, so the
+database still works with a path-keyed build. If the same series was labeled at
+two different paths by one labeler — possible under path keying, impossible to
+key by UID without discarding one — the file is refused with a message naming the
+rows, rather than silently dropping one.
+
 ## Database
 
 - `series`: one row per series: header values (TE, TR, TI, flip angle, field
@@ -96,8 +113,11 @@ back to `lumbar`, so review that field on non-spine-heavy datasets.
   `slice_thickness`, `slice_spacing`, `rows`, `columns`, `acquired_rows`,
   `acquired_columns`, `interpolated`) and the header guesses (`guess_plane`,
   `guess_region`, `guess_weight`, `guess_weight_reason`).
-- `labels`: one row per (series, labeler): the labels, notes, `expected_weight`
-  (the `--weight` passed at runtime), and `seconds_spent`.
+- `labels`: one row per (series, labeler), identified by `series_uid`, with
+  `series_key` recording the path the series was last seen at: the labels, notes,
+  `expected_weight` (the `--weight` passed at runtime), and `seconds_spent`.
+- `uid_cache`: each folder's `SeriesInstanceUID`, so startup need not re-read
+  every header.
 
 Comparing `labels.weight` with `expected_weight` or `series.guess_weight` gives the
 error rate of the upstream weight classification or of the header heuristic.

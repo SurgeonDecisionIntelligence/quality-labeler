@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS series (
 );
 
 CREATE TABLE IF NOT EXISTS labels (
-    series_key TEXT NOT NULL REFERENCES series(series_key),
+    series_key TEXT NOT NULL REFERENCES series(series_key),  -- last known path, for reference
+    series_uid TEXT,                     -- the identity: SeriesInstanceUID, or nouid:<path>
     labeler TEXT NOT NULL,
     quality INTEGER NOT NULL,            -- 1 (best) .. 5 (worst)
     noise INTEGER NOT NULL,              -- the graded findings below are 1 (none) .. 3 (severe)
@@ -62,7 +63,19 @@ CREATE TABLE IF NOT EXISTS labels (
     seconds_spent REAL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (series_key, labeler)
+    PRIMARY KEY (series_key, labeler)   -- kept for compatibility; identity is the index below
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS labels_by_uid ON labels (series_uid, labeler);
+CREATE INDEX IF NOT EXISTS series_by_uid ON series (series_uid);
+
+-- Remembers each folder's SeriesInstanceUID so startup need not re-read every header.
+CREATE TABLE IF NOT EXISTS uid_cache (
+    root TEXT NOT NULL,
+    series_key TEXT NOT NULL,
+    series_uid TEXT NOT NULL,
+    dir_mtime REAL NOT NULL,
+    PRIMARY KEY (root, series_key)
 );
 """
 
@@ -73,6 +86,10 @@ _INT_COLS = {s.name for s in SCALES}
 
 class SchemaMismatch(RuntimeError):
     """The database on disk was written with a different set of labels."""
+
+
+class AmbiguousHistory(RuntimeError):
+    """Older path-keyed rows that collapse onto one series once keyed by UID."""
 
 
 def _now() -> str:
@@ -92,8 +109,43 @@ class LabelStore:
                 f"{path} was written with label schema v{version}, this is v{SCHEMA_VERSION}. "
                 "Label into a new database file."
             )
+        self._migrate_to_uid_keys()
         self.conn.executescript(SCHEMA)
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _migrate_to_uid_keys(self):
+        """Give an older, path-keyed database the series_uid column, in place.
+
+        Only adds a column and backfills it, so a database stays readable by builds
+        that still key on the path.
+        """
+        tables = {r[0] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "labels" not in tables:
+            return  # new file; the schema script creates it with the column
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(labels)")}
+        if "series_uid" in columns:
+            return
+        with self.conn:
+            self.conn.execute("ALTER TABLE labels ADD COLUMN series_uid TEXT")
+            # The series table already recorded each path's UID when it was labeled.
+            self.conn.execute(
+                "UPDATE labels SET series_uid = coalesce("
+                "  (SELECT s.series_uid FROM series s WHERE s.series_key = labels.series_key),"
+                "  'nouid:' || labels.series_key)"
+                " WHERE series_uid IS NULL"
+            )
+        clashes = self.conn.execute(
+            "SELECT series_uid, labeler, count(*) AS n, group_concat(series_key, ' + ') AS paths"
+            " FROM labels GROUP BY series_uid, labeler HAVING n > 1 LIMIT 5"
+        ).fetchall()
+        if clashes:
+            detail = "; ".join(f"{r['labeler']} labeled {r['paths']}" for r in clashes)
+            raise AmbiguousHistory(
+                "This database has the same series labeled at more than one path, so its "
+                f"rows cannot be keyed by SeriesInstanceUID without losing one: {detail}. "
+                "Resolve the duplicates (keep one row per series and labeler), then reopen."
+            )
 
     def close(self):
         self.conn.close()
@@ -104,6 +156,7 @@ class LabelStore:
         root: Path,
         info: HeaderInfo,
         *,
+        series_uid: str | None = None,
         num_slices: int,
         num_files: int,
         load_error: str | None,
@@ -112,7 +165,7 @@ class LabelStore:
         row = {
             "series_key": key,
             "root": str(root),
-            "series_uid": info.series_uid,
+            "series_uid": series_uid or info.series_uid,
             "study_uid": info.study_uid,
             "series_description": info.series_description,
             "protocol_name": info.protocol_name,
@@ -149,15 +202,22 @@ class LabelStore:
 
     def save_labels(
         self,
-        key: str,
+        series_uid: str,
         labeler: str,
         labels: Labels,
         *,
+        series_key: str,
         expected_weight: str | None,
         seconds_spent: float | None,
     ):
+        """Store one person's labels for one series, identified by its UID.
+
+        series_key travels along as the last known path, so a series that moved on
+        disk updates its path instead of becoming a second row.
+        """
         row = {
-            "series_key": key,
+            "series_key": series_key,
+            "series_uid": series_uid,
             "labeler": labeler,
             **{k: int(v) if k in _BOOL_COLS else v for k, v in asdict(labels).items()},
             "expected_weight": expected_weight,
@@ -171,19 +231,19 @@ class LabelStore:
         updates = ", ".join(
             f"{c}=excluded.{c}"
             for c in row
-            if c not in ("series_key", "labeler", "created_at", "seconds_spent")
+            if c not in ("series_uid", "labeler", "created_at", "seconds_spent")
         )
         with self.conn:
             self.conn.execute(
                 f"INSERT INTO labels ({cols}) VALUES ({params}) "
-                f"ON CONFLICT(series_key, labeler) DO UPDATE SET {updates}, "
+                f"ON CONFLICT(series_uid, labeler) DO UPDATE SET {updates}, "
                 "seconds_spent = coalesce(seconds_spent, 0) + coalesce(excluded.seconds_spent, 0)",
                 row,
             )
 
-    def get_labels(self, key: str, labeler: str) -> Labels | None:
+    def get_labels(self, series_uid: str, labeler: str) -> Labels | None:
         row = self.conn.execute(
-            "SELECT * FROM labels WHERE series_key = ? AND labeler = ?", (key, labeler)
+            "SELECT * FROM labels WHERE series_uid = ? AND labeler = ?", (series_uid, labeler)
         ).fetchone()
         if row is None:
             return None
@@ -194,9 +254,29 @@ class LabelStore:
 
         return Labels(**{c: value(c) for c in _LABEL_COLS})
 
-    def labeled_keys(self, labeler: str) -> set[str]:
-        rows = self.conn.execute("SELECT series_key FROM labels WHERE labeler = ?", (labeler,))
+    def labeled_uids(self, labeler: str) -> set[str]:
+        rows = self.conn.execute(
+            "SELECT series_uid FROM labels WHERE labeler = ? AND series_uid IS NOT NULL",
+            (labeler,),
+        )
         return {r[0] for r in rows}
+
+    def cached_uids(self, root: Path) -> dict[str, tuple[str, float]]:
+        """What the last scan found, so unchanged folders need not be read again."""
+        rows = self.conn.execute(
+            "SELECT series_key, series_uid, dir_mtime FROM uid_cache WHERE root = ?", (str(root),)
+        )
+        return {r["series_key"]: (r["series_uid"], r["dir_mtime"]) for r in rows}
+
+    def remember_uids(self, root: Path, found: dict[str, tuple[str, float]]):
+        with self.conn:
+            self.conn.executemany(
+                "INSERT INTO uid_cache (root, series_key, series_uid, dir_mtime)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(root, series_key) DO UPDATE SET"
+                " series_uid = excluded.series_uid, dir_mtime = excluded.dir_mtime",
+                [(str(root), key, uid, mtime) for key, (uid, mtime) in found.items()],
+            )
 
     def export_csv(self, out: Path) -> int:
         cur = self.conn.execute(

@@ -1,12 +1,13 @@
 [project]
 name = "quality-labeler"
-version = "0.3.1"
+version = "0.3.2"
 description = "Fast keyboard-driven quality labeling of MRI DICOM series"
 readme = "README.md"
 authors = [{ name = "Josh Fisher", email = "fisherj@sdi-global.ai" }]
 requires-python = ">=3.13"
 dependencies = [
   "numpy>=2.5.3",
+  "pandas>=3.1.0",
   "pydicom>=3.0.2",
   "pylibjpeg[all]>=2.1.0",
   "pyside6>=6.11.2",
